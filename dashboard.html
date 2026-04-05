@@ -65,117 +65,131 @@
 <div class="container" id="app">Загрузка...</div>
 
 <script>
-    const SUPABASE_URL = 'https://xatvmdctucbyacxqffxi.supabase.co';
-    const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhhdHZtZGN0dWNieWFjeHFmZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwNDkxMzAsImV4cCI6MjA5MDYyNTEzMH0.xUbZtT0_spWI4b_tnZJx01NEFzLA0agdDUiWCPhWZ04';
-    
-    let currentShelter = null;
+    (function() {
+        const SUPABASE_URL = 'https://xatvmdctucbyacxqffxi.supabase.co';
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhhdHZtZGN0dWNieWFjeHFmZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwNDkxMzAsImV4cCI6MjA5MDYyNTEzMH0.xUbZtT0_spWI4b_tnZJx01NEFzLA0agdDUiWCPhWZ04';
 
-    async function checkAuth() {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            window.location.href = '/';
-            return;
+        // Явно создаём клиент Supabase
+        const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+        
+        let currentShelter = null;
+
+        async function checkAuth() {
+            const { data: { user }, error } = await supabase.auth.getUser();
+            
+            if (error) {
+                console.error('Auth error:', error);
+                window.location.href = '/';
+                return;
+            }
+            
+            if (!user) {
+                window.location.href = '/';
+                return;
+            }
+
+            const { data: shelter, error: shelterError } = await supabase
+                .from('shelters')
+                .select('*')
+                .eq('email', user.email)
+                .single();
+
+            if (shelterError || !shelter) {
+                console.error('Shelter error:', shelterError);
+                window.location.href = '/';
+                return;
+            }
+
+            currentShelter = shelter;
+            loadData();
         }
 
-        const { data: shelter } = await supabase
-            .from('shelters')
-            .select('*')
-            .eq('email', user.email)
-            .single();
+        async function loadData() {
+            const { data: pending } = await supabase
+                .from('pending_amounts')
+                .select('amount_usdt')
+                .eq('shelter_id', currentShelter.id)
+                .order('created_at', { ascending: false })
+                .limit(1);
 
-        if (!shelter) {
-            window.location.href = '/';
-            return;
+            const pendingAmount = pending && pending.length > 0 ? pending[0].amount_usdt : 0;
+
+            const { data: reports } = await supabase
+                .from('reports')
+                .select('*')
+                .eq('shelter_id', currentShelter.id)
+                .order('created_at', { ascending: false });
+
+            renderDashboard(pendingAmount, reports || []);
         }
 
-        currentShelter = shelter;
-        loadData();
-    }
+        async function submitReport() {
+            const description = document.getElementById('reportDesc').value;
+            if (!description) {
+                alert('Введите описание');
+                return;
+            }
 
-    async function loadData() {
-        const { data: pending } = await supabase
-            .from('pending_amounts')
-            .select('amount_usdt')
-            .eq('shelter_id', currentShelter.id)
-            .order('created_at', { ascending: false })
-            .limit(1);
+            const { error } = await supabase.from('reports').insert({
+                shelter_id: currentShelter.id,
+                amount_usdt: 0,
+                description: description,
+                photos: [],
+                video: null,
+                status: 'pending'
+            });
 
-        const pendingAmount = pending && pending.length > 0 ? pending[0].amount_usdt : 0;
-
-        const { data: reports } = await supabase
-            .from('reports')
-            .select('*')
-            .eq('shelter_id', currentShelter.id)
-            .order('created_at', { ascending: false });
-
-        renderDashboard(pendingAmount, reports || []);
-    }
-
-    async function submitReport() {
-        const description = document.getElementById('reportDesc').value;
-        if (!description) {
-            alert('Введите описание');
-            return;
+            if (error) {
+                alert('Ошибка: ' + error.message);
+            } else {
+                alert('Отчёт отправлен на проверку!');
+                window.location.reload();
+            }
         }
 
-        const { error } = await supabase.from('reports').insert({
-            shelter_id: currentShelter.id,
-            amount_usdt: 0,
-            description: description,
-            photos: [],
-            video: null,
-            status: 'pending'
-        });
+        function renderDashboard(pendingAmount, reports) {
+            const reportsHtml = reports.map(r => `
+                <div class="report-item">
+                    <strong>${r.amount_usdt} USDT</strong>
+                    <span class="status-${r.status}">
+                        ${r.status === 'pending' ? 'На проверке' : r.status === 'approved' ? 'Опубликован' : 'Отклонён'}
+                    </span>
+                    <p>${r.description || ''}</p>
+                    <small>${new Date(r.created_at).toLocaleDateString('ru-RU')}</small>
+                </div>
+            `).join('');
 
-        if (error) {
-            alert('Ошибка: ' + error.message);
-        } else {
-            alert('Отчёт отправлен на проверку!');
-            window.location.reload();
+            document.getElementById('app').innerHTML = `
+                <div class="card">
+                    <button class="logout-btn" id="logoutBtn">Выйти</button>
+                    <h1>${currentShelter.name}</h1>
+                    <p>${currentShelter.email}</p>
+                </div>
+                <div class="card">
+                    <h2>К отчёту сейчас</h2>
+                    <div class="pending-amount">${pendingAmount} USDT</div>
+                </div>
+                <div class="card">
+                    <h2>Новый отчёт</h2>
+                    <textarea id="reportDesc" rows="4" placeholder="На что потратили средства?"></textarea>
+                    <button id="submitBtn">Отправить отчёт</button>
+                </div>
+                <div class="card">
+                    <h2>История отчётов</h2>
+                    ${reportsHtml || 'Пока нет отчётов'}
+                </div>
+            `;
+
+            document.getElementById('logoutBtn').addEventListener('click', async () => {
+                await supabase.auth.signOut();
+                window.location.href = '/';
+            });
+            document.getElementById('submitBtn').addEventListener('click', submitReport);
         }
-    }
 
-    function renderDashboard(pendingAmount, reports) {
-        const reportsHtml = reports.map(r => `
-            <div class="report-item">
-                <strong>${r.amount_usdt} USDT</strong>
-                <span class="status-${r.status}">
-                    ${r.status === 'pending' ? 'На проверке' : r.status === 'approved' ? 'Опубликован' : 'Отклонён'}
-                </span>
-                <p>${r.description || ''}</p>
-                <small>${new Date(r.created_at).toLocaleDateString('ru-RU')}</small>
-            </div>
-        `).join('');
-
-        document.getElementById('app').innerHTML = `
-            <div class="card">
-                <button class="logout-btn" id="logoutBtn">Выйти</button>
-                <h1>${currentShelter.name}</h1>
-                <p>${currentShelter.email}</p>
-            </div>
-            <div class="card">
-                <h2>К отчёту сейчас</h2>
-                <div class="pending-amount">${pendingAmount} USDT</div>
-            </div>
-            <div class="card">
-                <h2>Новый отчёт</h2>
-                <textarea id="reportDesc" rows="4" placeholder="На что потратили средства?"></textarea>
-                <button id="submitBtn">Отправить отчёт</button>
-            </div>
-            <div class="card">
-                <h2>История отчётов</h2>
-                ${reportsHtml || 'Пока нет отчётов'}
-            </div>
-        `;
-
-        document.getElementById('logoutBtn').addEventListener('click', async () => {
-            await supabase.auth.signOut();
-            window.location.href = '/';
-        });
-        document.getElementById('submitBtn').addEventListener('click', submitReport);
-    }
-
-    checkAuth();
+        // Запускаем проверку авторизации
+        checkAuth();
+    })();
 </script>
 </body>
 </html>
