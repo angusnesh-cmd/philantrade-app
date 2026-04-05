@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Личный кабинет | Philantrade</title>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         body {
             font-family: system-ui, sans-serif;
@@ -64,26 +63,28 @@
 <body>
 <div class="container" id="app">Загрузка...</div>
 
+<!-- Загружаем Supabase -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 <script>
-    (function() {
+    // Ждём полной загрузки страницы и библиотеки
+    window.addEventListener('DOMContentLoaded', function() {
+        // Проверяем, что createClient загрузился
+        if (typeof createClient === 'undefined') {
+            document.getElementById('app').innerHTML = '<div class="card">Ошибка: библиотека Supabase не загрузилась. Обновите страницу.</div>';
+            return;
+        }
+
         const SUPABASE_URL = 'https://xatvmdctucbyacxqffxi.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhhdHZtZGN0dWNieWFjeHFmZnhpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUwNDkxMzAsImV4cCI6MjA5MDYyNTEzMH0.xUbZtT0_spWI4b_tnZJx01NEFzLA0agdDUiWCPhWZ04';
 
-        // Явно создаём клиент Supabase
         const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        
         let currentShelter = null;
 
         async function checkAuth() {
             const { data: { user }, error } = await supabase.auth.getUser();
             
-            if (error) {
-                console.error('Auth error:', error);
-                window.location.href = '/';
-                return;
-            }
-            
-            if (!user) {
+            if (error || !user) {
                 window.location.href = '/';
                 return;
             }
@@ -95,7 +96,6 @@
                 .single();
 
             if (shelterError || !shelter) {
-                console.error('Shelter error:', shelterError);
                 window.location.href = '/';
                 return;
             }
@@ -187,9 +187,8 @@
             document.getElementById('submitBtn').addEventListener('click', submitReport);
         }
 
-        // Запускаем проверку авторизации
         checkAuth();
-    })();
+    });
 </script>
 </body>
 </html>
