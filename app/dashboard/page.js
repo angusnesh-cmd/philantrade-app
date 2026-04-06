@@ -2,43 +2,68 @@ import { supabase } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 
 async function getUserData(userId) {
+  // Проверяем, админ ли это
+  const { data: { user } } = await supabase.auth.getUser()
+  const isAdmin = user?.email === 'angusnesh@gmail.com' 
+  
+  // Если админ - редиректим в админку
+  if (isAdmin) {
+    redirect('/admin')
+  }
+  
+  // Получаем данные приюта
   const { data: shelter } = await supabase
     .from('shelters')
-    .select('amount_due, name')
+    .select('*')
     .eq('id', userId)
     .single()
   
+  // Получаем отчёты приюта
   const { data: reports } = await supabase
     .from('reports')
     .select('*')
     .eq('shelter_id', userId)
     .order('created_at', { ascending: false })
-    .limit(10)
   
-  return { shelter, reports }
+  return { shelter, reports, isAdmin }
 }
 
 export default async function Dashboard() {
   const { data: { user } } = await supabase.auth.getUser()
   
   if (!user) {
-    return redirect('https://ваш-сайт.tilda.ws/login')
+    return redirect('https://philantrade.com/login')
   }
   
   const { shelter, reports } = await getUserData(user.id)
   
+  // Если shelter не найден (новый пользователь), показываем сообщение
+  if (!shelter) {
+    return (
+      <div style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center', marginTop: 100 }}>
+        <h1>⏳ Доступ настраивается</h1>
+        <p>Ваш аккаунт ещё не активирован. Пожалуйста, свяжитесь с администратором.</p>
+        <form action="/api/logout" method="POST">
+          <button type="submit" style={{ background: '#ccc', padding: '8px 16px', border: 'none', borderRadius: 5, cursor: 'pointer' }}>
+            Выйти
+          </button>
+        </form>
+      </div>
+    )
+  }
+  
   return (
     <div style={{ maxWidth: 800, margin: '0 auto' }}>
-      <h1>Личный кабинет приюта</h1>
-      <p>Email: {user.email}</p>
-      <p>Название: {shelter?.name || 'Не указано'}</p>
+      <h1>🏠 Личный кабинет приюта</h1>
+      <p><strong>Название:</strong> {shelter.name}</p>
+      <p><strong>Email:</strong> {shelter.email}</p>
       
       <div style={{ background: '#f0f9ff', padding: 20, borderRadius: 10, margin: '20px 0' }}>
-        <h2>💰 Сумма к отчёту: {shelter?.amount_due || 0} ₽</h2>
+        <h2>💰 Сумма к отчёту: {shelter.amount_due || 0} ₽</h2>
       </div>
       
-      <div style={{ border: '1px solid #ddd', padding: 20, borderRadius: 10 }}>
-        <h2>Загрузить новый отчёт</h2>
+      <div style={{ border: '1px solid #ddd', padding: 20, borderRadius: 10, marginBottom: 30 }}>
+        <h2>📤 Загрузить новый отчёт</h2>
         <form action="/api/reports/submit" method="POST" encType="multipart/form-data">
           <div style={{ marginBottom: 15 }}>
             <label>Потраченная сумма (₽):</label><br />
@@ -61,10 +86,10 @@ export default async function Dashboard() {
         </form>
       </div>
       
-      <div style={{ marginTop: 30 }}>
-        <h2>Мои предыдущие отчёты</h2>
-        {reports.length === 0 && <p>Пока нет отчётов</p>}
-        {reports.map(report => (
+      <div>
+        <h2>📋 Мои предыдущие отчёты</h2>
+        {reports?.length === 0 && <p>Пока нет отчётов</p>}
+        {reports?.map(report => (
           <div key={report.id} style={{ border: '1px solid #eee', padding: 15, marginBottom: 10, borderRadius: 8 }}>
             <p><strong>Сумма:</strong> {report.amount} ₽</p>
             <p><strong>Статус:</strong> {report.status === 'approved' ? '✅ Опубликован' : '⏳ На проверке'}</p>
