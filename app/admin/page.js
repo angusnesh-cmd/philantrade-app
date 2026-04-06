@@ -1,28 +1,22 @@
-import { supabaseAdmin } from '@/lib/supabase'
 import { supabase } from '@/lib/supabase'
+import { redirect } from 'next/navigation'
 
-// Проверка что это админ (по email)
 async function isAdmin() {
   const { data: { user } } = await supabase.auth.getUser()
-  const adminEmails = ['tvoi-email@example.com'] // ✏️ Замени на свой email
+  const adminEmail = 'angusnesh@gmail.com' 
   
-  return user && adminEmails.includes(user.email)
+  return user?.email === adminEmail
 }
 
 export default async function AdminPage() {
   const admin = await isAdmin()
   
   if (!admin) {
-    return (
-      <div style={{ textAlign: 'center', marginTop: 100 }}>
-        <h1>Доступ запрещён</h1>
-        <p>У вас нет прав для просмотра этой страницы</p>
-      </div>
-    )
+    return redirect('/dashboard') // Не админ - в дашборд
   }
   
-  // Получаем все отчёты со статусом pending
-  const { data: pendingReports } = await supabaseAdmin
+  // Получаем отчёты на проверке
+  const { data: pendingReports } = await supabase
     .from('reports')
     .select(`
       *,
@@ -32,7 +26,7 @@ export default async function AdminPage() {
     .order('created_at', { ascending: false })
   
   // Получаем опубликованные
-  const { data: approvedReports } = await supabaseAdmin
+  const { data: approvedReports } = await supabase
     .from('reports')
     .select(`
       *,
@@ -44,23 +38,23 @@ export default async function AdminPage() {
   
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto' }}>
-      <h1>📋 Админ-панель</h1>
+      <h1>👑 Админ-панель</h1>
       
-      <div style={{ background: '#fff3cd', padding: 15, borderRadius: 8, marginBottom: 30 }}>
+      <div style={{ background: '#fff3cd', padding: 20, borderRadius: 10, marginBottom: 30 }}>
         <h2>⏳ На проверке ({pendingReports?.length || 0})</h2>
-        {pendingReports?.length === 0 && <p>Нет отчётов на проверку</p>}
+        {pendingReports?.length === 0 && <p>Нет отчётов на проверке</p>}
         
         {pendingReports?.map(report => (
-          <div key={report.id} style={{ border: '1px solid #ffc107', padding: 15, marginBottom: 15, borderRadius: 8 }}>
-            <p><strong>Приют:</strong> {report.shelters?.email || report.shelter_id}</p>
-            <p><strong>Сумма:</strong> {report.amount} ₽</p>
-            <p><strong>Описание:</strong> {report.description}</p>
-            <p><strong>Дата:</strong> {new Date(report.created_at).toLocaleString('ru')}</p>
+          <div key={report.id} style={{ border: '1px solid #ffc107', padding: 15, marginBottom: 15, borderRadius: 8, background: '#fff' }}>
+            <p><strong>🏢 Приют:</strong> {report.shelters?.name || report.shelters?.email}</p>
+            <p><strong>💰 Сумма:</strong> {report.amount} ₽</p>
+            <p><strong>📝 Описание:</strong> {report.description}</p>
+            <p><strong>📅 Дата:</strong> {new Date(report.created_at).toLocaleString('ru')}</p>
             {report.photo_url && (
               <div>
                 <a href={report.photo_url} target="_blank">📷 Посмотреть фото</a>
                 <br />
-                <img src={report.photo_url} alt="Фото отчёта" style={{ maxWidth: 300, marginTop: 10 }} />
+                <img src={report.photo_url} alt="Фото отчёта" style={{ maxWidth: 300, marginTop: 10, border: '1px solid #ddd', borderRadius: 5 }} />
               </div>
             )}
             
@@ -78,11 +72,16 @@ export default async function AdminPage() {
         <h2>✅ Опубликованные отчёты</h2>
         {approvedReports?.map(report => (
           <div key={report.id} style={{ border: '1px solid #ddd', padding: 15, marginBottom: 10, borderRadius: 8, background: '#f9f9f9' }}>
-            <p><strong>Приют:</strong> {report.shelters?.email || report.shelter_id}</p>
+            <p><strong>Приют:</strong> {report.shelters?.name || report.shelters?.email}</p>
             <p><strong>Сумма:</strong> {report.amount} ₽</p>
             <p><strong>Описание:</strong> {report.description}</p>
+            <p><strong>Дата:</strong> {new Date(report.created_at).toLocaleString('ru')}</p>
           </div>
         ))}
+      </div>
+      
+      <div style={{ marginTop: 40, textAlign: 'center' }}>
+        <a href="/dashboard" style={{ color: '#0070f3' }}>← Вернуться в кабинет</a>
       </div>
     </div>
   )
