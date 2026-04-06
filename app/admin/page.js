@@ -3,8 +3,7 @@ import { redirect } from 'next/navigation'
 
 async function isAdmin() {
   const { data: { user } } = await supabase.auth.getUser()
-  const adminEmail = 'angusnesh@gmail.com' 
-  
+  const adminEmail = 'angusnesh@gmail.com' // ✏️ ЗАМЕНИ!
   return user?.email === adminEmail
 }
 
@@ -12,10 +11,9 @@ export default async function AdminPage() {
   const admin = await isAdmin()
   
   if (!admin) {
-    return redirect('/dashboard') // Не админ - в дашборд
+    redirect('/dashboard')
   }
   
-  // Получаем отчёты на проверке
   const { data: pendingReports } = await supabase
     .from('reports')
     .select(`
@@ -25,7 +23,6 @@ export default async function AdminPage() {
     .eq('status', 'pending')
     .order('created_at', { ascending: false })
   
-  // Получаем опубликованные
   const { data: approvedReports } = await supabase
     .from('reports')
     .select(`
