@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build --no-telemetry",
+    "build": "next build",
     "start": "next start"
   },
   "dependencies": {
