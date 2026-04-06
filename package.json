@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --no-telemetry",
     "start": "next start"
   },
   "dependencies": {
@@ -12,8 +12,5 @@
     "react": "19.0.4",
     "react-dom": "19.0.4",
     "@supabase/supabase-js": "^2.39.0"
-  },
-  "scripts": {
-    "build": "next build --no-telemetry"
   }
 }
