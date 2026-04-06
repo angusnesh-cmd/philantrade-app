@@ -2,42 +2,38 @@ import { supabase } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 
 async function getUserData(userId) {
-  // Проверяем, админ ли это
   const { data: { user } } = await supabase.auth.getUser()
-  const isAdmin = user?.email === 'angusnesh@gmail.com' 
+  const adminEmail = 'angusnesh@gmail.com' // ✏️ ЗАМЕНИ!
+  const isAdmin = user?.email === adminEmail
   
-  // Если админ - редиректим в админку
   if (isAdmin) {
     redirect('/admin')
   }
   
-  // Получаем данные приюта
   const { data: shelter } = await supabase
     .from('shelters')
     .select('*')
     .eq('id', userId)
     .single()
   
-  // Получаем отчёты приюта
   const { data: reports } = await supabase
     .from('reports')
     .select('*')
     .eq('shelter_id', userId)
     .order('created_at', { ascending: false })
   
-  return { shelter, reports, isAdmin }
+  return { shelter, reports }
 }
 
 export default async function Dashboard() {
   const { data: { user } } = await supabase.auth.getUser()
   
   if (!user) {
-    return redirect('https://philantrade.com/login')
+    redirect('https://philantrade.com/login')
   }
   
   const { shelter, reports } = await getUserData(user.id)
   
-  // Если shelter не найден (новый пользователь), показываем сообщение
   if (!shelter) {
     return (
       <div style={{ maxWidth: 800, margin: '0 auto', textAlign: 'center', marginTop: 100 }}>
@@ -72,7 +68,7 @@ export default async function Dashboard() {
           
           <div style={{ marginBottom: 15 }}>
             <label>Описание трат:</label><br />
-            <textarea name="description" rows="4" required style={{ width: '100%', padding: 8 }} />
+            <textarea name="description" rows={4} required style={{ width: '100%', padding: 8 }} />
           </div>
           
           <div style={{ marginBottom: 15 }}>
