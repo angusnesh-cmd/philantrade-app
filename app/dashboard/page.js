@@ -3,7 +3,7 @@ import { redirect } from 'next/navigation'
 
 async function getUserData(userId) {
   const { data: { user } } = await supabase.auth.getUser()
-  const adminEmail = 'angusnesh@gmail.com' // ✏️ ЗАМЕНИ!
+  const adminEmail = 'angusnesh@gmail.com'
   const isAdmin = user?.email === adminEmail
   
   if (isAdmin) {
