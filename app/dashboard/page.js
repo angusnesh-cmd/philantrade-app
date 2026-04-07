@@ -23,7 +23,7 @@ export default function Dashboard() {
       setUser(session.user);
       
       // Проверка на админа
-      const adminEmail = 'ТВОЙ_EMAIL@example.com'; // ✏️ ЗАМЕНИ!
+      const adminEmail = 'angusnesh@gmail.com';
       
       if (session.user.email === adminEmail) {
         router.push('/admin');
