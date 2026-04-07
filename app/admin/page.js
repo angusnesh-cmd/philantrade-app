@@ -18,7 +18,7 @@ export default function AdminPage() {
         return;
       }
       
-      const adminEmail = 'angusnesh@gmail.com'; // ✏️ ЗАМЕНИ!
+      const adminEmail = 'angusnesh@gmail.com'; 
       
       if (session.user.email !== adminEmail) {
         router.push('/dashboard');
