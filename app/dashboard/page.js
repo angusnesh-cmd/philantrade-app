@@ -171,10 +171,13 @@ export default function Dashboard() {
         .from('distributions')
         .update({ is_processed: true })
         .in('id', formData.selectedIds);
-      
+
       if (updateError) {
-        console.error('Ошибка обновления распределений:', updateError);
-      }
+         console.error('Ошибка обновления распределений:', updateError);
+      // Не прерываем выполнение, так как отчёт уже создан
+      } else {
+         console.log(`✅ Обновлено ${formData.selectedIds.length} распределений`);
+       }
       
       // 4. Очищаем форму
       setFormData({
