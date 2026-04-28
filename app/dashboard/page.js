@@ -15,7 +15,7 @@ export default function Dashboard() {
   
   // Состояние формы
   const [formData, setFormData] = useState({
-    distributionId: '',
+    selectedIds: [],      // массив выбранных distribution_id
     description: '',
     photos: []
   });
@@ -58,25 +58,56 @@ export default function Dashboard() {
       
       setDistributions(distData || []);
       
-      // Загружаем существующие отчёты
+      // Загружаем существующие отчёты (с полем distribution_ids)
       const { data: reportsData } = await supabase
         .from('reports')
-        .select('*, distributions(amount, transaction_hash)')
+        .select('*')
         .eq('shelter_id', session.user.id)
         .order('created_at', { ascending: false });
       
-      setReports(reportsData || []);
+      // Для каждого отчёта получаем суммы распределений
+      const reportsWithDetails = await Promise.all((reportsData || []).map(async (report) => {
+        if (report.distribution_ids && report.distribution_ids.length > 0) {
+          const { data: dists } = await supabase
+            .from('distributions')
+            .select('amount')
+            .in('id', report.distribution_ids);
+          
+          const totalAmount = dists?.reduce((sum, d) => sum + d.amount, 0) || 0;
+          return { ...report, total_amount: totalAmount };
+        }
+        return { ...report, total_amount: 0 };
+      }));
+      
+      setReports(reportsWithDetails || []);
       setLoading(false);
     };
     
     checkUser();
   }, [router]);
 
+  // Рассчитываем общую сумму выбранных поступлений
+  const getSelectedTotal = () => {
+    return distributions
+      .filter(d => formData.selectedIds.includes(d.id))
+      .reduce((sum, d) => sum + d.amount, 0);
+  };
+
+  const toggleDistribution = (id) => {
+    setFormData(prev => {
+      if (prev.selectedIds.includes(id)) {
+        return { ...prev, selectedIds: prev.selectedIds.filter(i => i !== id) };
+      } else {
+        return { ...prev, selectedIds: [...prev.selectedIds, id] };
+      }
+    });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!formData.distributionId) {
-      alert('Выберите поступление, по которому хотите отчитаться');
+    if (formData.selectedIds.length === 0) {
+      alert('Выберите хотя бы одно поступление, по которому хотите отчитаться');
       return;
     }
     
@@ -105,7 +136,6 @@ export default function Dashboard() {
           .upload(filePath, photo);
         
         if (uploadError) {
-          console.error('Ошибка загрузки фото:', uploadError);
           throw new Error('Не удалось загрузить фото: ' + uploadError.message);
         }
         
@@ -116,36 +146,39 @@ export default function Dashboard() {
         photoUrls.push(urlData.publicUrl);
       }
       
-      // 2. Создаём отчёт
-      const { error: insertError } = await supabase
+      // 2. Создаём отчёт (с массивом distribution_ids)
+      const totalAmount = getSelectedTotal();
+      
+      const { data: newReport, error: insertError } = await supabase
         .from('reports')
         .insert({
-          distribution_id: formData.distributionId,
           shelter_id: shelter.id,
+          distribution_ids: formData.selectedIds,
+          total_amount: totalAmount,
           report_text: formData.description,
           report_photos: photoUrls,
           status: 'pending'
-        });
+        })
+        .select()
+        .single();
       
       if (insertError) {
-        console.error('Ошибка создания отчёта:', insertError);
         throw new Error('Не удалось создать отчёт: ' + insertError.message);
       }
       
-      // 3. Обновляем статус распределения
+      // 3. Обновляем статус ВСЕХ выбранных распределений
       const { error: updateError } = await supabase
         .from('distributions')
         .update({ is_processed: true })
-        .eq('id', formData.distributionId);
+        .in('id', formData.selectedIds);
       
       if (updateError) {
-        console.error('Ошибка обновления распределения:', updateError);
-        // Не прерываем выполнение, так как отчёт уже создан
+        console.error('Ошибка обновления распределений:', updateError);
       }
       
       // 4. Очищаем форму
       setFormData({
-        distributionId: '',
+        selectedIds: [],
         description: '',
         photos: []
       });
@@ -162,13 +195,27 @@ export default function Dashboard() {
       
       const { data: reportsData } = await supabase
         .from('reports')
-        .select('*, distributions(amount, transaction_hash)')
+        .select('*')
         .eq('shelter_id', shelter.id)
         .order('created_at', { ascending: false });
       
-      setReports(reportsData || []);
+      // Обновляем суммы для отчётов
+      const reportsWithDetails = await Promise.all((reportsData || []).map(async (report) => {
+        if (report.distribution_ids && report.distribution_ids.length > 0) {
+          const { data: dists } = await supabase
+            .from('distributions')
+            .select('amount')
+            .in('id', report.distribution_ids);
+          
+          const total = dists?.reduce((sum, d) => sum + d.amount, 0) || 0;
+          return { ...report, total_amount: total };
+        }
+        return { ...report, total_amount: 0 };
+      }));
       
-      alert('✅ Отчёт успешно отправлен на проверку!');
+      setReports(reportsWithDetails);
+      
+      alert(`✅ Отчёт на сумму ${totalAmount} USDT успешно отправлен на проверку!`);
       
     } catch (error) {
       console.error('Ошибка:', error);
@@ -197,8 +244,10 @@ export default function Dashboard() {
     );
   }
 
+  const selectedTotal = getSelectedTotal();
+
   return (
-    <div style={{ maxWidth: 800, margin: '0 auto', padding: 20 }}>
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: 20 }}>
       <h1>🏠 Личный кабинет приюта</h1>
       <p><strong>Название:</strong> {shelter.name}</p>
       <p><strong>Email:</strong> {shelter.email}</p>
@@ -211,19 +260,61 @@ export default function Dashboard() {
       {distributions.length > 0 && (
         <div style={{ marginBottom: 30 }}>
           <h3>📋 Неподтверждённые поступления</h3>
-          <select
-            value={formData.distributionId}
-            onChange={(e) => setFormData({ ...formData, distributionId: e.target.value })}
-            style={{ width: '100%', padding: 10, marginBottom: 10, border: '1px solid #ddd', borderRadius: 5 }}
-            required
-          >
-            <option value="">Выберите поступление</option>
-            {distributions.map(d => (
-              <option key={d.id} value={d.id}>
-                {d.amount} USDT — {new Date(d.created_at).toLocaleDateString()}
-              </option>
-            ))}
-          </select>
+          <p style={{ color: '#666', marginBottom: 10 }}>
+            Выберите одно или несколько поступлений, которые хотите объединить в один отчёт
+          </p>
+          
+          <div style={{ border: '1px solid #ddd', borderRadius: 10, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead style={{ background: '#f5f5f5' }}>
+                <tr>
+                  <th style={{ padding: 12, textAlign: 'left', width: 50 }}>✓</th>
+                  <th style={{ padding: 12, textAlign: 'left' }}>Дата</th>
+                  <th style={{ padding: 12, textAlign: 'right' }}>Сумма (USDT)</th>
+                  <th style={{ padding: 12, textAlign: 'left' }}>Транзакция</th>
+                </tr>
+              </thead>
+              <tbody>
+                {distributions.map(dist => (
+                  <tr key={dist.id} style={{ borderTop: '1px solid #eee' }}>
+                    <td style={{ padding: 12, textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={formData.selectedIds.includes(dist.id)}
+                        onChange={() => toggleDistribution(dist.id)}
+                        style={{ width: 20, height: 20 }}
+                      />
+                    </td>
+                    <td style={{ padding: 12 }}>
+                      {new Date(dist.created_at).toLocaleDateString()}
+                    </td>
+                    <td style={{ padding: 12, textAlign: 'right', fontWeight: 'bold' }}>
+                      {dist.amount}
+                    </td>
+                    <td style={{ padding: 12, fontSize: 12, color: '#666' }}>
+                      {dist.transaction_hash?.slice(0, 10)}...
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          
+          {formData.selectedIds.length > 0 && (
+            <div style={{ 
+              background: '#e6f7e6', 
+              padding: 15, 
+              borderRadius: 10, 
+              marginTop: 15,
+              textAlign: 'center'
+            }}>
+              <strong>✅ Выбрано поступлений: {formData.selectedIds.length}</strong>
+              <br />
+              <span style={{ fontSize: 18, color: '#10b981' }}>
+                Общая сумма отчёта: {selectedTotal} USDT
+              </span>
+            </div>
+          )}
         </div>
       )}
       
@@ -271,17 +362,18 @@ export default function Dashboard() {
           
           <button 
             type="submit" 
-            disabled={submitting || distributions.length === 0}
+            disabled={submitting || distributions.length === 0 || formData.selectedIds.length === 0}
             style={{ 
-              background: distributions.length === 0 ? '#ccc' : '#0070f3', 
+              background: (distributions.length === 0 || formData.selectedIds.length === 0) ? '#ccc' : '#0070f3', 
               color: 'white', 
-              padding: '10px 20px', 
+              padding: '12px 24px', 
               border: 'none', 
               borderRadius: 5,
-              cursor: distributions.length === 0 ? 'not-allowed' : 'pointer'
+              fontSize: 16,
+              cursor: (distributions.length === 0 || formData.selectedIds.length === 0) ? 'not-allowed' : 'pointer'
             }}
           >
-            {submitting ? 'Отправка...' : 'Отправить отчёт на проверку'}
+            {submitting ? 'Отправка...' : `Отправить отчёт на ${selectedTotal} USDT`}
           </button>
         </form>
       </div>
@@ -294,7 +386,7 @@ export default function Dashboard() {
             <div key={report.id} style={{ border: '1px solid #eee', padding: 15, borderRadius: 10, marginBottom: 15 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                 <span style={{ fontWeight: 'bold' }}>
-                  {report.distributions?.amount || '?'} USDT
+                  {report.total_amount || report.total_amount} USDT
                 </span>
                 <span style={{ 
                   padding: '2px 10px', 
@@ -317,6 +409,11 @@ export default function Dashboard() {
                   {report.report_photos.length > 3 && (
                     <span>+{report.report_photos.length - 3} фото</span>
                   )}
+                </div>
+              )}
+              {report.distribution_ids && report.distribution_ids.length > 1 && (
+                <div style={{ fontSize: 12, color: '#666', marginTop: 10 }}>
+                  📦 Объединённый отчёт по {report.distribution_ids.length} поступлениям
                 </div>
               )}
               <div style={{ fontSize: 12, color: '#999', marginTop: 10 }}>
