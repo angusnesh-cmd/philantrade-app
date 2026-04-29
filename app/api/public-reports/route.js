@@ -6,18 +6,42 @@ export async function GET() {
     .from('reports')
     .select(`
       id,
-      amount,
-      description,
-      photo_url,
+      total_amount,
+      report_text,
+      report_photos,
+      published_at,
       created_at,
-      shelters (name)
+      shelters (
+        id,
+        name,
+        wallet_address
+      )
     `)
     .eq('status', 'approved')
-    .order('created_at', { ascending: false })
+    .order('published_at', { ascending: false })
   
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
   
-  return NextResponse.json(reports)
+  // Возвращаем JSON с CORS заголовками для Tilda
+  return NextResponse.json(reports, {
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    }
+  })
+}
+
+// Обработка OPTIONS запроса для CORS (preflight)
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    }
+  })
 }
