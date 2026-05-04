@@ -13,10 +13,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [selectedDates, setSelectedDates] = useState([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   
   const [formData, setFormData] = useState({
     description: '',
-    photoUrls: []
+    photos: []  // теперь это массив File объектов
   });
 
   useEffect(() => {
@@ -36,7 +37,6 @@ export default function Dashboard() {
         return;
       }
 
-      // Загружаем данные приюта
       const { data: shelterData } = await supabase
         .from('shelters')
         .select('*')
@@ -45,49 +45,66 @@ export default function Dashboard() {
       
       setShelter(shelterData);
       
-      // Загружаем НЕПОДТВЕРЖДЁННЫЕ распределения (is_processed = false)
-      const { data: distData } = await supabase
-        .from('distributions')
-        .select('*')
-        .eq('shelter_id', session.user.id)
-        .eq('is_processed', false)
-        .order('date', { ascending: true });
+      await loadDistributions();
+      await loadReports();
       
-      // Группируем по дате
-      const grouped = {};
-      distData?.forEach(d => {
-        const date = d.date || new Date(d.created_at).toISOString().split('T')[0];
-        if (!grouped[date]) {
-          grouped[date] = {
-            date: date,
-            total_amount: 0,
-            count: 0,
-            distributions: []
-          };
-        }
-        grouped[date].total_amount += d.amount;
-        grouped[date].count++;
-        grouped[date].distributions.push(d);
-      });
-      
-      const groupedArray = Object.values(grouped).sort((a, b) => b.date.localeCompare(a.date));
-      setGroupedDistributions(groupedArray);
-      
-      // Загружаем историю отчётов
-      const { data: reportsData } = await supabase
-        .from('reports')
-        .select('*')
-        .eq('shelter_id', session.user.id)
-        .order('created_at', { ascending: false });
-      
-      setReports(reportsData || []);
       setLoading(false);
     };
     
     checkUser();
   }, [router]);
 
+  const loadDistributions = async () => {
+    if (!shelter) return;
+    
+    const { data: distData } = await supabase
+      .from('distributions')
+      .select('*')
+      .eq('shelter_id', shelter.id)
+      .order('date', { ascending: false });
+    
+    // Группируем по дате
+    const grouped = {};
+    distData?.forEach(d => {
+      const date = d.date || new Date(d.created_at).toISOString().split('T')[0];
+      if (!grouped[date]) {
+        grouped[date] = {
+          date: date,
+          total_amount: 0,
+          count: 0,
+          processed_count: 0,
+          distributions: []
+        };
+      }
+      grouped[date].total_amount += d.amount;
+      grouped[date].count++;
+      if (d.is_processed) grouped[date].processed_count++;
+      grouped[date].distributions.push(d);
+    });
+    
+    const groupedArray = Object.values(grouped).sort((a, b) => b.date.localeCompare(a.date));
+    setGroupedDistributions(groupedArray);
+  };
+
+  const loadReports = async () => {
+    if (!shelter) return;
+    
+    const { data: reportsData } = await supabase
+      .from('reports')
+      .select('*')
+      .eq('shelter_id', shelter.id)
+      .order('created_at', { ascending: false });
+    
+    setReports(reportsData || []);
+  };
+
   const toggleDate = (date) => {
+    // Можно выбирать только дни, в которых есть неподтверждённые поступления
+    const group = groupedDistributions.find(g => g.date === date);
+    const hasUnprocessed = group && group.processed_count < group.count;
+    
+    if (!hasUnprocessed) return;
+    
     setSelectedDates(prev => 
       prev.includes(date) 
         ? prev.filter(d => d !== date)
@@ -98,7 +115,7 @@ export default function Dashboard() {
   const getSelectedTotal = () => {
     return groupedDistributions
       .filter(g => selectedDates.includes(g.date))
-      .reduce((sum, g) => sum + g.total_amount, 0);
+      .reduce((sum, g) => sum + (g.total_amount * (g.count - g.processed_count) / g.count), 0);
   };
 
   const getSelectedIds = () => {
@@ -106,9 +123,41 @@ export default function Dashboard() {
     groupedDistributions
       .filter(g => selectedDates.includes(g.date))
       .forEach(g => {
-        g.distributions.forEach(d => ids.push(d.id));
+        // Берём только неподтверждённые распределения
+        g.distributions
+          .filter(d => !d.is_processed)
+          .forEach(d => ids.push(d.id));
       });
     return ids;
+  };
+
+  const uploadPhotos = async (files, shelterId) => {
+    const urls = [];
+    
+    for (const file of files) {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `shelter_${shelterId}/${fileName}`;
+      
+      const { error: uploadError } = await supabase.storage
+        .from('reports')
+        .upload(filePath, file);
+      
+      if (uploadError) throw new Error(`Ошибка загрузки фото: ${uploadError.message}`);
+      
+      const { data: urlData } = supabase.storage
+        .from('reports')
+        .getPublicUrl(filePath);
+      
+      urls.push(urlData.publicUrl);
+    }
+    
+    return urls;
+  };
+
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    setFormData({ ...formData, photos: files });
   };
 
   const handleSubmit = async (e) => {
@@ -127,8 +176,20 @@ export default function Dashboard() {
     setSubmitting(true);
     
     try {
+      setUploadingPhotos(true);
+      // Загружаем фото
+      const photoUrls = formData.photos.length > 0 
+        ? await uploadPhotos(formData.photos, shelter.id)
+        : [];
+      setUploadingPhotos(false);
+      
       const selectedIds = getSelectedIds();
       const totalAmount = getSelectedTotal();
+      
+      if (selectedIds.length === 0) {
+        alert('Нет неподтверждённых поступлений в выбранные дни');
+        return;
+      }
       
       // Создаём отчёт
       const { error: insertError } = await supabase
@@ -138,7 +199,7 @@ export default function Dashboard() {
           distribution_ids: selectedIds,
           total_amount: totalAmount,
           report_text: formData.description,
-          report_photos: formData.photoUrls,
+          report_photos: photoUrls,
           status: 'pending'
         });
       
@@ -154,41 +215,11 @@ export default function Dashboard() {
       
       // Очищаем форму
       setSelectedDates([]);
-      setFormData({ description: '', photoUrls: [] });
+      setFormData({ description: '', photos: [] });
       
       // Обновляем данные
-      const { data: distData } = await supabase
-        .from('distributions')
-        .select('*')
-        .eq('shelter_id', shelter.id)
-        .eq('is_processed', false)
-        .order('date', { ascending: true });
-      
-      const grouped = {};
-      distData?.forEach(d => {
-        const date = d.date || new Date(d.created_at).toISOString().split('T')[0];
-        if (!grouped[date]) {
-          grouped[date] = {
-            date: date,
-            total_amount: 0,
-            count: 0,
-            distributions: []
-          };
-        }
-        grouped[date].total_amount += d.amount;
-        grouped[date].count++;
-        grouped[date].distributions.push(d);
-      });
-      
-      setGroupedDistributions(Object.values(grouped).sort((a, b) => b.date.localeCompare(a.date)));
-      
-      const { data: reportsData } = await supabase
-        .from('reports')
-        .select('*')
-        .eq('shelter_id', shelter.id)
-        .order('created_at', { ascending: false });
-      
-      setReports(reportsData || []);
+      await loadDistributions();
+      await loadReports();
       
       alert(`✅ Отчёт на сумму ${totalAmount} USDT отправлен на проверку!`);
       
@@ -197,7 +228,14 @@ export default function Dashboard() {
       alert(`❌ Ошибка: ${error.message}`);
     } finally {
       setSubmitting(false);
+      setUploadingPhotos(false);
     }
+  };
+
+  const getDayStatus = (group) => {
+    if (group.processed_count === 0 && group.count > 0) return 'unprocessed';
+    if (group.processed_count === group.count) return 'processed';
+    return 'partial';
   };
 
   if (loading) {
@@ -222,46 +260,79 @@ export default function Dashboard() {
       <p><strong>Название:</strong> {shelter.name}</p>
       
       <div style={{ background: '#f0f9ff', padding: 20, borderRadius: 10, margin: '20px 0' }}>
-        <h2>💰 Сумма к отчёту: {shelter.amount_due || 0} USDT</h2>
+        <h2>💰 Сумма к отчёту: {shelter.amount_due?.toFixed(2) || 0} USDT</h2>
       </div>
       
-      {/* Группированные поступления */}
+      {/* Список дней с поступлениями */}
       {groupedDistributions.length > 0 && (
         <div style={{ marginBottom: 30 }}>
           <h3>📋 Поступления по дням</h3>
           <p style={{ color: '#666', marginBottom: 10 }}>
-            Выберите дни, которые хотите объединить в один отчёт
+            ✅ Зелёный — всё подтверждено | 🟡 Жёлтый — частично | ⚪ Белый — требует отчёта
           </p>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {groupedDistributions.map(group => (
-              <div 
-                key={group.date}
-                onClick={() => toggleDate(group.date)}
-                style={{
-                  border: selectedDates.includes(group.date) ? '2px solid #10b981' : '1px solid #ddd',
-                  background: selectedDates.includes(group.date) ? '#f0fdf4' : 'white',
-                  padding: 15,
-                  borderRadius: 10,
-                  cursor: 'pointer',
-                  transition: 'all 0.2s'
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <strong style={{ fontSize: 16 }}>
-                      📅 {new Date(group.date).toLocaleDateString('ru-RU')}
-                    </strong>
-                    <div style={{ fontSize: 12, color: '#666', marginTop: 5 }}>
-                      {group.count} поступлений
+            {groupedDistributions.map(group => {
+              const status = getDayStatus(group);
+              const isSelected = selectedDates.includes(group.date);
+              const hasUnprocessed = status !== 'processed';
+              
+              let bgColor = 'white';
+              let borderColor = '#ddd';
+              let statusText = '';
+              
+              if (status === 'processed') {
+                bgColor = '#f0fdf4';
+                borderColor = '#10b981';
+                statusText = '✅ Отчёт принят';
+              } else if (status === 'partial') {
+                bgColor = '#fefce8';
+                borderColor = '#eab308';
+                statusText = '🟡 Частично подтверждён';
+              }
+              
+              return (
+                <div 
+                  key={group.date}
+                  onClick={() => hasUnprocessed && toggleDate(group.date)}
+                  style={{
+                    border: `2px solid ${isSelected ? '#10b981' : borderColor}`,
+                    background: isSelected ? '#f0fdf4' : bgColor,
+                    padding: 15,
+                    borderRadius: 10,
+                    cursor: hasUnprocessed ? 'pointer' : 'default',
+                    transition: 'all 0.2s',
+                    opacity: !hasUnprocessed ? 0.7 : 1
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <strong style={{ fontSize: 16 }}>
+                        📅 {new Date(group.date).toLocaleDateString('ru-RU')}
+                      </strong>
+                      <div style={{ fontSize: 12, color: '#666', marginTop: 5 }}>
+                        {group.count} поступлений
+                        {status === 'processed' && <span style={{ color: '#10b981', marginLeft: 8 }}>✅ Все подтверждены</span>}
+                        {status === 'partial' && <span style={{ color: '#eab308', marginLeft: 8 }}>🟡 {group.processed_count}/{group.count} подтверждено</span>}
+                      </div>
                     </div>
-                  </div>
-                  <div style={{ fontSize: 20, fontWeight: 'bold', color: '#10b981' }}>
-                    {group.total_amount.toFixed(2)} USDT
+                    <div style={{ fontSize: 20, fontWeight: 'bold', color: '#10b981' }}>
+                      {group.total_amount.toFixed(2)} USDT
+                    </div>
+                    {isSelected && (
+                      <div style={{ background: '#10b981', color: 'white', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
+                        ✓ Выбран
+                      </div>
+                    )}
+                    {!hasUnprocessed && (
+                      <div style={{ background: '#10b981', color: 'white', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
+                        ✓ Готово
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           
           {selectedDates.length > 0 && (
@@ -275,7 +346,7 @@ export default function Dashboard() {
               <strong>✅ Выбрано дней: {selectedDates.length}</strong>
               <br />
               <span style={{ fontSize: 18, color: '#10b981' }}>
-                Общая сумма отчёта: {selectedTotal} USDT
+                Общая сумма отчёта: {selectedTotal.toFixed(2)} USDT
               </span>
             </div>
           )}
@@ -284,7 +355,7 @@ export default function Dashboard() {
       
       {groupedDistributions.length === 0 && (
         <div style={{ background: '#fef3c7', padding: 15, borderRadius: 10, marginBottom: 20 }}>
-          <p>✅ У вас нет неподтверждённых поступлений. Все средства подтверждены!</p>
+          <p>✅ У вас нет поступлений. Когда средства поступят, они появятся здесь.</p>
         </div>
       )}
       
@@ -305,19 +376,34 @@ export default function Dashboard() {
           </div>
           
           <div style={{ marginBottom: 15 }}>
-            <label style={{ display: 'block', marginBottom: 5, fontWeight: 500 }}>
-              Ссылки на фото (через запятую)
-            </label>
+            <label style={{ display: 'block', marginBottom: 5, fontWeight: 500 }}>Фото (можно выбрать несколько)</label>
             <input
-              type="text"
-              placeholder="https://example.com/photo1.jpg, https://example.com/photo2.jpg"
-              value={formData.photoUrls.join(', ')}
-              onChange={(e) => setFormData({ 
-                ...formData, 
-                photoUrls: e.target.value.split(',').map(url => url.trim()).filter(url => url) 
-              })}
-              style={{ width: '100%', padding: 8, border: '1px solid #ddd', borderRadius: 5 }}
+              type="file"
+              multiple
+              accept="image/*"
+              onChange={handleFileChange}
+              style={{ width: '100%', padding: 8 }}
             />
+            <small style={{ color: '#666', display: 'block', marginTop: 5 }}>
+              Поддерживаются форматы: JPG, PNG, GIF, WEBP
+            </small>
+            {formData.photos.length > 0 && (
+              <div style={{ marginTop: 10, fontSize: 14, color: '#10b981' }}>
+                ✅ Выбрано фото: {formData.photos.length}
+                <div style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+                  {formData.photos.map((photo, idx) => (
+                    <div key={idx} style={{ textAlign: 'center' }}>
+                      <img 
+                        src={URL.createObjectURL(photo)} 
+                        alt="preview" 
+                        style={{ width: 60, height: 60, objectFit: 'cover', borderRadius: 8 }}
+                      />
+                      <div style={{ fontSize: 10, color: '#666' }}>{photo.name.slice(0, 15)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           
           <button 
@@ -333,7 +419,7 @@ export default function Dashboard() {
               cursor: (groupedDistributions.length === 0 || selectedDates.length === 0) ? 'not-allowed' : 'pointer'
             }}
           >
-            {submitting ? 'Отправка...' : `Отправить отчёт на ${selectedTotal} USDT`}
+            {uploadingPhotos ? '⏳ Загрузка фото...' : submitting ? 'Отправка...' : `Отправить отчёт на ${selectedTotal.toFixed(2)} USDT`}
           </button>
         </form>
       </div>
