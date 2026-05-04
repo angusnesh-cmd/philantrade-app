@@ -11,7 +11,12 @@ export default function AdminPage() {
   const [rejectedReports, setRejectedReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState(null);
-  const [stats, setStats] = useState({ totalShelters: 0, totalDistributed: 0, totalApproved: 0 });
+  const [stats, setStats] = useState({ 
+    totalShelters: 0, 
+    totalDistributed: 0, 
+    totalApproved: 0,
+    totalPending: 0
+  });
 
   useEffect(() => {
     const checkAdmin = async () => {
@@ -38,64 +43,80 @@ export default function AdminPage() {
   const loadData = async () => {
     setLoading(true);
     
-    // Загружаем отчёты на проверку (pending)
-    const { data: pending } = await supabase
-      .from('reports')
-      .select('*, shelters(name, email, wallet_address)')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
-    
-    // Загружаем одобренные отчёты
-    const { data: approved } = await supabase
-      .from('reports')
-      .select('*, shelters(name, email)')
-      .eq('status', 'approved')
-      .order('published_at', { ascending: false })
-      .limit(20);
-    
-    // Загружаем отклонённые отчёты
-    const { data: rejected } = await supabase
-      .from('reports')
-      .select('*, shelters(name, email)')
-      .eq('status', 'rejected')
-      .order('reviewed_at', { ascending: false })
-      .limit(20);
-    
-    // Статистика
-    const { data: sheltersCount } = await supabase
-      .from('shelters')
-      .select('id', { count: 'exact', head: true });
-    
-    const { data: distributionsTotal } = await supabase
-      .from('distributions')
-      .select('amount');
-    
-    const totalDistributed = distributionsTotal?.reduce((sum, d) => sum + (d.amount || 0), 0) || 0;
-    
-    const { data: approvedCount } = await supabase
-      .from('reports')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'approved');
-    
-    setPendingReports(pending || []);
-    setApprovedReports(approved || []);
-    setRejectedReports(rejected || []);
-    setStats({
-      totalShelters: sheltersCount?.length || 0,
-      totalDistributed: totalDistributed,
-      totalApproved: approvedCount?.length || 0
-    });
-    setLoading(false);
+    try {
+      // 1. Загружаем отчёты на проверку (pending)
+      const { data: pending } = await supabase
+        .from('reports')
+        .select('*, shelters(name, email, wallet_address)')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+      
+      setPendingReports(pending || []);
+      
+      // 2. Загружаем одобренные отчёты
+      const { data: approved } = await supabase
+        .from('reports')
+        .select('*, shelters(name, email)')
+        .eq('status', 'approved')
+        .order('published_at', { ascending: false })
+        .limit(20);
+      
+      setApprovedReports(approved || []);
+      
+      // 3. Загружаем отклонённые отчёты
+      const { data: rejected } = await supabase
+        .from('reports')
+        .select('*, shelters(name, email)')
+        .eq('status', 'rejected')
+        .order('reviewed_at', { ascending: false })
+        .limit(20);
+      
+      setRejectedReports(rejected || []);
+      
+      // 4. СТАТИСТИКА: количество приютов
+      const { count: sheltersCount, error: sheltersError } = await supabase
+        .from('shelters')
+        .select('*', { count: 'exact', head: true });
+      
+      if (sheltersError) console.error('Ошибка подсчёта приютов:', sheltersError);
+      
+      // 5. СТАТИСТИКА: общая сумма распределений
+      const { data: distributionsData, error: distError } = await supabase
+        .from('distributions')
+        .select('amount');
+      
+      if (distError) console.error('Ошибка загрузки распределений:', distError);
+      
+      const totalDistributed = distributionsData?.reduce((sum, d) => sum + (d.amount || 0), 0) || 0;
+      
+      // 6. СТАТИСТИКА: количество одобренных отчётов
+      const { count: approvedCount, error: approvedError } = await supabase
+        .from('reports')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'approved');
+      
+      if (approvedError) console.error('Ошибка подсчёта одобренных:', approvedError);
+      
+      setStats({
+        totalShelters: sheltersCount || 0,
+        totalDistributed: totalDistributed,
+        totalApproved: approvedCount || 0,
+        totalPending: pending?.length || 0
+      });
+      
+    } catch (error) {
+      console.error('Ошибка загрузки данных:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleApprove = async (reportId) => {
     setProcessingId(reportId);
     
     try {
-      // Получаем текущего админа
       const { data: { user } } = await supabase.auth.getUser();
       
-      // Вызываем функцию approve_report
       const { data, error } = await supabase.rpc('approve_report', {
         p_report_id: reportId,
         p_admin_id: user.id
@@ -105,7 +126,7 @@ export default function AdminPage() {
       
       if (data?.success) {
         alert(`✅ Отчёт одобрен! Сумма ${data.subtracted_amount} USDT списана с баланса приюта`);
-        await loadData(); // Обновляем список
+        await loadData();
       } else {
         alert(`❌ Ошибка: ${data?.error}`);
       }
@@ -167,7 +188,7 @@ export default function AdminPage() {
       {/* Статистика */}
       <div style={{ 
         display: 'grid', 
-        gridTemplateColumns: 'repeat(3, 1fr)', 
+        gridTemplateColumns: 'repeat(4, 1fr)', 
         gap: 20, 
         marginBottom: 30,
         background: '#f5f5f5',
@@ -176,7 +197,9 @@ export default function AdminPage() {
       }}>
         <div style={{ textAlign: 'center' }}>
           <h3>🏠 Приюты</h3>
-          <p style={{ fontSize: 28, fontWeight: 'bold', margin: 0 }}>{stats.totalShelters}</p>
+          <p style={{ fontSize: 28, fontWeight: 'bold', margin: 0, color: '#2b2a28' }}>
+            {stats.totalShelters}
+          </p>
         </div>
         <div style={{ textAlign: 'center' }}>
           <h3>💰 Распределено всего</h3>
@@ -186,7 +209,15 @@ export default function AdminPage() {
         </div>
         <div style={{ textAlign: 'center' }}>
           <h3>✅ Одобрено отчётов</h3>
-          <p style={{ fontSize: 28, fontWeight: 'bold', margin: 0 }}>{stats.totalApproved}</p>
+          <p style={{ fontSize: 28, fontWeight: 'bold', margin: 0, color: '#2b2a28' }}>
+            {stats.totalApproved}
+          </p>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <h3>⏳ На проверке</h3>
+          <p style={{ fontSize: 28, fontWeight: 'bold', margin: 0, color: '#f59e0b' }}>
+            {stats.totalPending}
+          </p>
         </div>
       </div>
 
