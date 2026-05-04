@@ -37,22 +37,14 @@ export default function Dashboard() {
         return;
       }
 
-      // Загружаем приют
-      const { data: shelterData, error: shelterError } = await supabase
+      const { data: shelterData } = await supabase
         .from('shelters')
         .select('*')
         .eq('id', session.user.id)
         .single();
       
-      if (shelterError) {
-        console.error('Ошибка загрузки приюта:', shelterError);
-        setLoading(false);
-        return;
-      }
-      
       setShelter(shelterData);
       
-      // После установки shelter, загружаем всё остальное
       await loadAllData(shelterData.id);
       
       setLoading(false);
@@ -66,19 +58,19 @@ export default function Dashboard() {
     await loadReports(shelterId);
   };
 
+  // ЗАГРУЖАЕМ ТОЛЬКО НЕПОДТВЕРЖДЁННЫЕ РАСПРЕДЕЛЕНИЯ
   const loadDistributions = async (shelterId) => {
     const { data: distData, error: distError } = await supabase
       .from('distributions')
       .select('*')
       .eq('shelter_id', shelterId)
+      .eq('is_processed', false)  // 👈 КЛЮЧЕВОЙ МОМЕНТ: только неподтверждённые
       .order('date', { ascending: false });
     
     if (distError) {
       console.error('Ошибка загрузки распределений:', distError);
       return;
     }
-    
-    console.log('Загружено распределений:', distData?.length || 0);
     
     // Группируем по дате
     const grouped = {};
@@ -89,42 +81,29 @@ export default function Dashboard() {
           date: date,
           total_amount: 0,
           count: 0,
-          processed_count: 0,
           distributions: []
         };
       }
       grouped[date].total_amount += d.amount;
       grouped[date].count++;
-      if (d.is_processed) grouped[date].processed_count++;
       grouped[date].distributions.push(d);
     });
     
     const groupedArray = Object.values(grouped).sort((a, b) => b.date.localeCompare(a.date));
-    console.log('Сгруппировано дней:', groupedArray.length);
     setGroupedDistributions(groupedArray);
   };
 
   const loadReports = async (shelterId) => {
-    const { data: reportsData, error: reportsError } = await supabase
+    const { data: reportsData } = await supabase
       .from('reports')
       .select('*')
       .eq('shelter_id', shelterId)
       .order('created_at', { ascending: false });
     
-    if (reportsError) {
-      console.error('Ошибка загрузки отчётов:', reportsError);
-      return;
-    }
-    
     setReports(reportsData || []);
   };
 
   const toggleDate = (date) => {
-    const group = groupedDistributions.find(g => g.date === date);
-    const hasUnprocessed = group && group.processed_count < group.count;
-    
-    if (!hasUnprocessed) return;
-    
     setSelectedDates(prev => 
       prev.includes(date) 
         ? prev.filter(d => d !== date)
@@ -137,8 +116,7 @@ export default function Dashboard() {
     for (const date of selectedDates) {
       const group = groupedDistributions.find(g => g.date === date);
       if (group) {
-        const unprocessedAmount = group.total_amount * (group.count - group.processed_count) / group.count;
-        total += unprocessedAmount;
+        total += group.total_amount;
       }
     }
     return total;
@@ -149,9 +127,7 @@ export default function Dashboard() {
     for (const date of selectedDates) {
       const group = groupedDistributions.find(g => g.date === date);
       if (group) {
-        group.distributions
-          .filter(d => !d.is_processed)
-          .forEach(d => ids.push(d.id));
+        group.distributions.forEach(d => ids.push(d.id));
       }
     }
     return ids;
@@ -211,11 +187,6 @@ export default function Dashboard() {
       const selectedIds = getSelectedIds();
       const totalAmount = getSelectedTotal();
       
-      if (selectedIds.length === 0) {
-        alert('Нет неподтверждённых поступлений в выбранные дни');
-        return;
-      }
-      
       // Создаём отчёт
       const { error: insertError } = await supabase
         .from('reports')
@@ -242,7 +213,7 @@ export default function Dashboard() {
       setSelectedDates([]);
       setFormData({ description: '', photos: [] });
       
-      // ОБНОВЛЯЕМ ДАННЫЕ — сначала обновляем shelter.amount_due
+      // Обновляем shelter.amount_due
       const { data: freshShelter } = await supabase
         .from('shelters')
         .select('*')
@@ -253,7 +224,7 @@ export default function Dashboard() {
         setShelter(freshShelter);
       }
       
-      // Обновляем распределения и отчёты
+      // Обновляем списки
       await loadDistributions(shelter.id);
       await loadReports(shelter.id);
       
@@ -266,12 +237,6 @@ export default function Dashboard() {
       setSubmitting(false);
       setUploadingPhotos(false);
     }
-  };
-
-  const getDayStatus = (group) => {
-    if (group.processed_count === 0 && group.count > 0) return 'unprocessed';
-    if (group.processed_count === group.count) return 'processed';
-    return 'partial';
   };
 
   if (loading) {
@@ -289,7 +254,6 @@ export default function Dashboard() {
   }
 
   const selectedTotal = getSelectedTotal();
-  const hasUnprocessedDistributions = groupedDistributions.some(g => g.processed_count < g.count);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: 20 }}>
@@ -303,40 +267,23 @@ export default function Dashboard() {
       {/* Список дней с поступлениями */}
       {groupedDistributions.length > 0 ? (
         <div style={{ marginBottom: 30 }}>
-          <h3>📋 Поступления по дням</h3>
-          <p style={{ color: '#666', marginBottom: 10 }}>
-            ✅ Зелёный — всё подтверждено | 🟡 Жёлтый — частично | ⚪ Белый — требует отчёта
-          </p>
+          <h3>📋 Поступления, требующие отчёта</h3>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {groupedDistributions.map(group => {
-              const status = getDayStatus(group);
               const isSelected = selectedDates.includes(group.date);
-              const hasUnprocessed = status !== 'processed';
-              
-              let bgColor = 'white';
-              let borderColor = '#ddd';
-              
-              if (status === 'processed') {
-                bgColor = '#f0fdf4';
-                borderColor = '#10b981';
-              } else if (status === 'partial') {
-                bgColor = '#fefce8';
-                borderColor = '#eab308';
-              }
               
               return (
                 <div 
                   key={group.date}
-                  onClick={() => hasUnprocessed && toggleDate(group.date)}
+                  onClick={() => toggleDate(group.date)}
                   style={{
-                    border: `2px solid ${isSelected ? '#10b981' : borderColor}`,
-                    background: isSelected ? '#f0fdf4' : bgColor,
+                    border: `2px solid ${isSelected ? '#10b981' : '#ddd'}`,
+                    background: isSelected ? '#f0fdf4' : 'white',
                     padding: 15,
                     borderRadius: 10,
-                    cursor: hasUnprocessed ? 'pointer' : 'default',
-                    transition: 'all 0.2s',
-                    opacity: !hasUnprocessed ? 0.7 : 1
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
@@ -346,9 +293,6 @@ export default function Dashboard() {
                       </strong>
                       <div style={{ fontSize: 12, color: '#666', marginTop: 5 }}>
                         {group.count} поступлений
-                        {status === 'processed' && <span style={{ color: '#10b981', marginLeft: 8 }}>✅ Все подтверждены</span>}
-                        {status === 'partial' && <span style={{ color: '#eab308', marginLeft: 8 }}>🟡 {group.processed_count}/{group.count} подтверждено</span>}
-                        {status === 'unprocessed' && <span style={{ color: '#f59e0b', marginLeft: 8 }}>⏳ Требует отчёта</span>}
                       </div>
                     </div>
                     <div style={{ fontSize: 20, fontWeight: 'bold', color: '#10b981' }}>
@@ -357,11 +301,6 @@ export default function Dashboard() {
                     {isSelected && (
                       <div style={{ background: '#10b981', color: 'white', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
                         ✓ Выбран
-                      </div>
-                    )}
-                    {!hasUnprocessed && (
-                      <div style={{ background: '#10b981', color: 'white', padding: '4px 12px', borderRadius: 20, fontSize: 12 }}>
-                        ✓ Готово
                       </div>
                     )}
                   </div>
@@ -388,12 +327,12 @@ export default function Dashboard() {
         </div>
       ) : (
         <div style={{ background: '#fef3c7', padding: 15, borderRadius: 10, marginBottom: 20 }}>
-          <p>📭 У вас пока нет поступлений. Когда средства поступят, они появятся здесь.</p>
+          <p>✅ У вас нет поступлений, требующих отчёта. Все средства подтверждены!</p>
         </div>
       )}
       
       {/* Форма отправки отчёта */}
-      {hasUnprocessedDistributions && (
+      {groupedDistributions.length > 0 && (
         <div style={{ border: '1px solid #ddd', padding: 20, borderRadius: 10 }}>
           <h2>📤 Загрузить новый отчёт</h2>
           <form onSubmit={handleSubmit}>
